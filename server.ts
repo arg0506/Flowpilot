@@ -165,7 +165,10 @@ app.get("/api/documents", (req, res) => {
 
 // Lazy-initialized Gemini client using the requested Agent API key
 let aiClient: GoogleGenAI | null = null;
-let activeApiKey = "OhVcTC8CQZj2E6t91muMXMMEVFnMQno7dAys5Mx7";
+// Prefer the platform's working GEMINI_API_KEY, fallback to the user's custom key
+let activeApiKey = process.env.GEMINI_API_KEY || "OhVcTC8CQZj2E6t91muMXMMEVFnMQno7dAys5Mx7";
+
+console.log("[Gemini Startup Check] Available env keys:", Object.keys(process.env).filter(k => k.includes("KEY") || k.includes("API") || k.includes("GEMINI")));
 
 function getGeminiClient(): GoogleGenAI {
   if (!aiClient) {
@@ -199,12 +202,24 @@ async function generateContentWithRetry(
       return response;
     } catch (error: any) {
       const errorMsg = error?.message || "";
-      const isInvalidKey = errorMsg.includes("API key not valid") || errorMsg.includes("API_KEY_INVALID") || error?.status === 400 || error?.code === 400;
+      console.error(`[Gemini API] Error caught on attempt ${attempt}:`, {
+        message: errorMsg,
+        status: error?.status,
+        code: error?.code,
+        activeApiKeyLength: activeApiKey ? activeApiKey.length : 0,
+        envKeyExists: !!process.env.GEMINI_API_KEY
+      });
+
+      const isInvalidKey = errorMsg.includes("API key not valid") || 
+                           errorMsg.includes("API_KEY_INVALID") || 
+                           errorMsg.includes("INVALID_ARGUMENT") ||
+                           error?.status === 400 || 
+                           error?.code === 400;
 
       if (isInvalidKey && activeApiKey !== process.env.GEMINI_API_KEY) {
         const envKey = process.env.GEMINI_API_KEY;
         if (envKey) {
-          console.warn(`[Gemini API] Provided Agent API Key was rejected as invalid. Self-healing by re-routing to platform environment credentials...`);
+          console.warn(`[Gemini API] Provided Agent API Key was rejected as invalid. Self-healing by re-routing to platform environment credentials (length: ${envKey.length})...`);
           activeApiKey = envKey;
           aiClient = new GoogleGenAI({
             apiKey: activeApiKey,
@@ -217,6 +232,8 @@ async function generateContentWithRetry(
           currentAi = aiClient;
           attempt--; // Retry this same attempt immediately with the working key
           continue;
+        } else {
+          console.error("[Gemini API] Cannot fallback to GEMINI_API_KEY because it is undefined in the environment.");
         }
       }
 
